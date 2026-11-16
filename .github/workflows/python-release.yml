@@ -157,7 +157,7 @@ jobs:
           merge-multiple: true
       - name: Verify candidate identities and checksums
         id: verify
-        run: &verify-candidate |
+        run: |
           python3 - <<'PY'
           import hashlib
           import json
