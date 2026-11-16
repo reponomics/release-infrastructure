@@ -20,6 +20,7 @@ def namespace(step_name):
     return result
 
 
+VALIDATE_EVENT = namespace('Validate the data-only interface')['validate_event']
 VALIDATE = namespace('Validate the data-only interface')['validate_inputs']
 SELECT = namespace('Select regular files inside the artifact')['select_files']
 
@@ -92,3 +93,14 @@ def test_output_injection_filename_is_rejected(artifact):
     (artifact / 'dist/x\nINJECT=value').write_bytes(b'bad')
     with pytest.raises(ValueError, match='safe ASCII'):
         SELECT(artifact, 'dist/*', '')
+
+
+@pytest.mark.parametrize('event', ['create', 'release', 'push', 'workflow_dispatch'])
+def test_supported_source_event(event):
+    VALIDATE_EVENT(event)
+
+
+@pytest.mark.parametrize('event', ['pull_request', 'pull_request_target', 'repository_dispatch', 'workflow_run', 'workflow_call', ''])
+def test_unsupported_source_event_is_rejected(event):
+    with pytest.raises(ValueError, match='Unsupported source workflow event'):
+        VALIDATE_EVENT(event)

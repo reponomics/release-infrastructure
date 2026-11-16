@@ -42,6 +42,7 @@ jobs:
     steps:
       - name: Validate the data-only interface
         env:
+          EVENT_NAME: ${{ github.event_name }}
           ARTIFACT_ID: ${{ inputs.artifact-id }}
           SUBJECT_PATH: ${{ inputs.subject-path }}
           SBOM_PATH: ${{ inputs.sbom-path }}
@@ -58,6 +59,10 @@ jobs:
               if any(part in ('', '.', '..') for part in value.split('/')):
                   raise ValueError('Absolute and traversing paths are forbidden')
 
+          def validate_event(event):
+              if event not in ('create', 'release', 'push', 'workflow_dispatch'):
+                  raise ValueError('Unsupported source workflow event for provenance')
+
           def validate_inputs(artifact_id, subject, sbom, name):
               if not re.fullmatch(r'[1-9][0-9]*', artifact_id):
                   raise ValueError('Expected one numeric artifact ID')
@@ -67,6 +72,7 @@ jobs:
               if sbom:
                   validate_path(sbom)
 
+          validate_event(os.environ['EVENT_NAME'])
           validate_inputs(os.environ['ARTIFACT_ID'], os.environ['SUBJECT_PATH'],
                           os.environ['SBOM_PATH'], os.environ['ATTESTATION_NAME'])
           PY
