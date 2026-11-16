@@ -55,3 +55,18 @@ def test_every_action_is_pinned_and_workflow_defaults_are_read_only():
             for step in job.get('steps', []):
                 if 'uses' in step:
                     assert re.fullmatch(r'[^@]+@[0-9a-f]{40}', step['uses'])
+
+
+def test_scan_failure_blocks_bundle_and_both_distribution_inventories_are_scanned():
+    steps = {step['name']: step for step in JOBS['build']['steps']}
+    bundle = steps['Assemble the successful release bundle']
+    assert 'if' not in bundle
+    assert 'continue-on-error' not in bundle
+    vulnerability = steps['Scan candidate and tooling dependencies for vulnerabilities']
+    licenses = steps['Check candidate and tooling licenses']
+    for scan in (vulnerability, licenses):
+        assert 'continue-on-error' not in scan
+        for kind in ('wheel', 'sdist'):
+            assert f'runtime-{kind}.inventory.json' in scan['with']['scan-args']
+    assert 'stdlib-inventory.json' in vulnerability['with']['scan-args']
+    assert 'stdlib-inventory.json' not in licenses['with']['scan-args']
