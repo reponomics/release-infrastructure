@@ -66,6 +66,6 @@ Also check the verified provenance's `buildDefinition.externalParameters.workflo
 
 ## Development
 
-Python 3.11 or newer is required. Run `make setup`, then `make check` with `actionlint` available on PATH. Tests cover unsafe artifact identifiers, path traversal, symlinks, output injection, missing files and workflow privilege boundaries. CI builds the pinned workflow linter and checks every workflow.
+Python 3.11 or newer is required. Run `make setup`, then `make check`. Tests cover unsafe artifact identifiers, path traversal, symlinks, output injection, missing files and workflow privilege boundaries, including action pins and read-only default permissions. CI runs these tests as the required `test` check. Changes to the signing workflow should also exercise a consuming project's signing and verification qualification before adoption.
 
 The repository originally adapted release tooling from best-practices-mcp v0.5.0 under the MIT license. See [LICENSE](LICENSE).
