@@ -1,0 +1,139 @@
+name: Attest caller artifacts
+
+on:
+  workflow_call:
+    inputs:
+      artifact-id:
+        description: One artifact ID uploaded by this caller workflow run
+        required: true
+        type: string
+      subject-path:
+        description: Relative artifact path or glob inside the downloaded artifact
+        required: true
+        type: string
+      sbom-path:
+        description: Optional relative SBOM file; empty generates build provenance
+        required: false
+        default: ''
+        type: string
+      attestation-name:
+        description: Unique safe filename stem for this invocation's signed bundle
+        required: true
+        type: string
+    outputs:
+      attestations:
+        description: Exact artifact ID containing the signed attestation bundle
+        value: ${{ jobs.attest.outputs.attestations }}
+
+permissions:
+  contents: read
+
+jobs:
+  attest:
+    name: Generate and sign the attestation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      attestations: ${{ steps.bundle.outputs.artifact-id }}
+    steps:
+      - name: Validate the data-only interface
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ARTIFACT_ID: ${{ inputs.artifact-id }}
+          SUBJECT_PATH: ${{ inputs.subject-path }}
+          SBOM_PATH: ${{ inputs.sbom-path }}
+          ATTESTATION_NAME: ${{ inputs.attestation-name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+
+          def validate_path(value, *, glob=False):
+              alphabet = r'[A-Za-z0-9_.*?/-]+' if glob else r'[A-Za-z0-9_./-]+'
+              if not re.fullmatch(alphabet, value):
+                  raise ValueError('Paths must use safe relative ASCII names')
+              if any(part in ('', '.', '..') for part in value.split('/')):
+                  raise ValueError('Absolute and traversing paths are forbidden')
+
+          def validate_event(event):
+              if event not in ('create', 'release', 'push', 'workflow_dispatch'):
+                  raise ValueError('Unsupported source workflow event for provenance')
+
+          def validate_inputs(artifact_id, subject, sbom, name):
+              if not re.fullmatch(r'[1-9][0-9]*', artifact_id):
+                  raise ValueError('Expected one numeric artifact ID')
+              if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}', name):
+                  raise ValueError('Unsafe attestation name')
+              validate_path(subject, glob=True)
+              if sbom:
+                  validate_path(sbom)
+
+          validate_event(os.environ['EVENT_NAME'])
+          validate_inputs(os.environ['ARTIFACT_ID'], os.environ['SUBJECT_PATH'],
+                          os.environ['SBOM_PATH'], os.environ['ATTESTATION_NAME'])
+          PY
+      - name: Download this run's artifact as data
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ inputs.artifact-id }}
+          path: artifact
+          merge-multiple: true
+      - name: Select regular files inside the artifact
+        id: files
+        env:
+          SUBJECT_PATH: ${{ inputs.subject-path }}
+          SBOM_PATH: ${{ inputs.sbom-path }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          def regular_file(root, path):
+              if path.is_symlink() or not path.is_file():
+                  raise ValueError('Only regular files can be attested')
+              path.resolve().relative_to(root.resolve())
+              if not re.fullmatch(r'[A-Za-z0-9_./-]+', path.relative_to(root).as_posix()):
+                  raise ValueError('Selected filenames must use safe ASCII names')
+              return path.as_posix()
+
+          def select_files(root, subject_pattern, sbom_path):
+              if any(path.is_symlink() for path in root.rglob('*')):
+                  raise ValueError('Symlinks are forbidden in artifact data')
+              subjects = sorted(root.glob(subject_pattern))
+              if not 1 <= len(subjects) <= 1024:
+                  raise ValueError('Expected between 1 and 1024 subjects')
+              files = [regular_file(root, path) for path in subjects]
+              sbom = regular_file(root, root / sbom_path) if sbom_path else ''
+              return files, sbom
+
+          subjects, sbom = select_files(Path('artifact'), os.environ['SUBJECT_PATH'], os.environ['SBOM_PATH'])
+          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
+              output.write('subjects<<SUBJECTS\n' + '\n'.join(subjects) + '\nSUBJECTS\n')
+              output.write('sbom=' + sbom + '\n')
+          PY
+      - name: Generate and sign provenance or the supplied SBOM
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.files.outputs.subjects }}
+          sbom-path: ${{ steps.files.outputs.sbom }}
+      - name: Preserve the signed bundle
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          ATTESTATION_NAME: ${{ inputs.attestation-name }}
+        run: |
+          mkdir attestations
+          cp -- "$BUNDLE_PATH" "attestations/$ATTESTATION_NAME.sigstore.json"
+      - name: Upload the signed bundle
+        id: bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: attestations-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.attestation-name }}
+          path: attestations/
+          if-no-files-found: error
+          retention-days: 30
